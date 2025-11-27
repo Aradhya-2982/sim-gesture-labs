@@ -1,189 +1,154 @@
-import { useState, useEffect, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { DeviceScene } from "@/components/DeviceScene";
-import { GestureRecorder } from "@/components/GestureRecorder";
-import { Timeline } from "@/components/Timeline";
-import { ArrowLeft, Save } from "lucide-react";
-import { loadProjects, saveProject } from "@/lib/storage";
-import { Project, Gesture, GestureFrame } from "@/types/project";
-import { toast } from "sonner";
+import { Card } from "@/components/ui/card";
+import { ArrowLeft, Wifi, Circle, Square, MousePointer2, Crosshair } from "lucide-react";
+import { useGloveWebSocket } from "@/hooks/useGloveWebSocket"; 
 
 export default function Studio() {
-  const { projectId } = useParams();
   const navigate = useNavigate();
-  const [project, setProject] = useState<Project | null>(null);
-  const [currentGesture, setCurrentGesture] = useState<Gesture | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [gestureName, setGestureName] = useState("");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  const { 
+    isConnected,
+    connectToBridge, 
+    recalibrate, // <--- New
+    cursorRef, 
+    clickRef, 
+    latestDataRef,
+    isRecording, 
+    startRecording, 
+    stopRecording 
+  } = useGloveWebSocket();
 
   useEffect(() => {
-    if (projectId) {
-      const projects = loadProjects();
-      const found = projects.find((p) => p.id === projectId);
-      if (found) {
-        setProject(found);
-      } else {
-        navigate("/");
+    connectToBridge();
+  }, [connectToBridge]);
+
+  useEffect(() => {
+    let animationFrameId: number;
+    const render = () => {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      
+      if (canvas && ctx) {
+        ctx.fillStyle = "#0f1419";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(canvas.width / 2, 0); ctx.lineTo(canvas.width / 2, canvas.height);
+        ctx.moveTo(0, canvas.height / 2); ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.stroke();
+
+        const x = cursorRef.current.x + (canvas.width / 2);
+        const y = cursorRef.current.y + (canvas.height / 2);
+
+        ctx.beginPath();
+        ctx.arc(x, y, 15, 0, 2 * Math.PI);
+        ctx.fillStyle = clickRef.current ? "#22c55e" : "#3b82f6";
+        ctx.fill();
+        
+        if (clickRef.current) {
+          ctx.beginPath();
+          ctx.arc(x, y, 40, 0, 2 * Math.PI);
+          ctx.strokeStyle = "#22c55e";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
       }
-    }
-  }, [projectId, navigate]);
-
-  useEffect(() => {
-    if (isPlaying && currentGesture) {
-      const interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= currentGesture.duration) {
-            setIsPlaying(false);
-            return currentGesture.duration;
-          }
-          return prev + 16.67; // ~60fps
-        });
-      }, 16.67);
-      return () => clearInterval(interval);
-    }
-  }, [isPlaying, currentGesture]);
-
-  const getCurrentFrame = useCallback(() => {
-    if (!currentGesture || currentGesture.frames.length === 0) return null;
-    
-    const frame = currentGesture.frames.find((f) => f.t >= currentTime);
-    return frame || currentGesture.frames[currentGesture.frames.length - 1];
-  }, [currentGesture, currentTime]);
-
-  const handleGestureComplete = (frames: GestureFrame[]) => {
-    if (!project) return;
-    
-    const name = gestureName.trim() || `Gesture ${project.gestures.length + 1}`;
-    const gesture: Gesture = {
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      frames,
-      duration: frames[frames.length - 1]?.t || 0,
-      createdAt: new Date().toISOString(),
+      animationFrameId = requestAnimationFrame(render);
     };
-
-    const updatedProject = {
-      ...project,
-      gestures: [...project.gestures, gesture],
-      updatedAt: new Date().toISOString(),
-    };
-
-    saveProject(updatedProject);
-    setProject(updatedProject);
-    setCurrentGesture(gesture);
-    setGestureName("");
-    toast.success("Gesture saved!");
-  };
-
-  const handleSave = () => {
-    if (project) {
-      saveProject(project);
-      toast.success("Project saved!");
-    }
-  };
-
-  const currentFrame = getCurrentFrame();
+    render();
+    return () => cancelAnimationFrame(animationFrameId);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
-              <div>
-                <h1 className="text-2xl font-bold">{project?.name}</h1>
-                <p className="text-sm text-muted-foreground">
-                  {project?.gestures.length || 0} gestures
-                </p>
-              </div>
-            </div>
-            <Button onClick={handleSave}>
-              <Save className="w-4 h-4 mr-2" />
-              Save
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="border-b border-border bg-card sticky top-0 z-10">
+        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/")}>
+              <ArrowLeft className="w-5 h-5" />
             </Button>
+            <h1 className="text-2xl font-bold">Wireless Glove Studio</h1>
+          </div>
+          
+          <div className={`flex items-center gap-2 font-mono text-sm px-3 py-1 rounded border 
+                ${isConnected ? "bg-green-500/10 text-green-500 border-green-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"}`}>
+              <Wifi className="w-4 h-4" />
+              {isConnected ? "CONNECTED" : "DISCONNECTED"}
           </div>
         </div>
       </header>
 
       <main className="container mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          
           <div className="space-y-6">
-            <div>
-              <label className="text-sm font-medium mb-2 block">Gesture Name</label>
-              <Input
-                placeholder="Enter gesture name..."
-                value={gestureName}
-                onChange={(e) => setGestureName(e.target.value)}
-              />
-            </div>
-            <GestureRecorder onGestureComplete={handleGestureComplete} />
-          </div>
-
-          <div className="h-[500px]">
-            <DeviceScene
-              rotation={currentFrame?.rotation}
-              position={currentFrame?.position}
-            />
-          </div>
-        </div>
-
-        {currentGesture && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">
-                Playback: {currentGesture.name}
-              </h2>
-              <div className="text-sm text-muted-foreground">
-                {currentGesture.frames.length} frames
-              </div>
-            </div>
-            
-            <Timeline
-              duration={currentGesture.duration}
-              currentTime={currentTime}
-              isPlaying={isPlaying}
-              onTimeChange={setCurrentTime}
-              onPlayPause={() => setIsPlaying(!isPlaying)}
-              onReset={() => {
-                setCurrentTime(0);
-                setIsPlaying(false);
-              }}
-            />
-          </div>
-        )}
-
-        {project?.gestures && project.gestures.length > 0 && (
-          <div className="mt-8">
-            <h2 className="text-xl font-semibold mb-4">Saved Gestures</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {project.gestures.map((gesture) => (
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Controls</h3>
+              <div className="flex flex-col gap-3">
                 <Button
-                  key={gesture.id}
-                  variant="outline"
-                  className="h-auto p-4 justify-start"
-                  onClick={() => {
-                    setCurrentGesture(gesture);
-                    setCurrentTime(0);
-                    setIsPlaying(false);
-                  }}
+                    onClick={recalibrate}
+                    variant="outline"
+                    className="w-full h-12 text-lg border-dashed border-2"
                 >
-                  <div className="text-left">
-                    <div className="font-semibold">{gesture.name}</div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {gesture.frames.length} frames · {(gesture.duration / 1000).toFixed(2)}s
-                    </div>
-                  </div>
+                    <Crosshair className="w-5 h-5 mr-2" /> RESET CENTER
                 </Button>
-              ))}
+
+                <Button
+                    onClick={isRecording ? stopRecording : startRecording}
+                    variant={isRecording ? "destructive" : "default"}
+                    className="w-full h-12 text-lg"
+                    disabled={!isConnected}
+                >
+                    {isRecording ? (
+                    <><Square className="w-5 h-5 mr-2 fill-current" /> STOP RECORDING</>
+                    ) : (
+                    <><Circle className="w-5 h-5 mr-2 fill-current" /> START RECORDING</>
+                    )}
+                </Button>
+              </div>
+            </Card>
+
+            <Card className="p-6 flex flex-col items-center justify-center min-h-[200px]">
+              <div className={`transition-all duration-100 flex flex-col items-center gap-4 ${clickRef.current ? "scale-110" : "scale-100"}`}>
+                <MousePointer2 className={`w-16 h-16 ${clickRef.current ? "text-green-500 fill-green-500" : "text-gray-600"}`} />
+                <span className={`text-xl font-bold font-mono ${clickRef.current ? "text-green-500" : "text-gray-600"}`}>
+                  {clickRef.current ? "CLICK!" : "IDLE"}
+                </span>
+              </div>
+            </Card>
+          </div>
+
+          <div className="lg:col-span-2 space-y-6">
+            <Card className="p-1 bg-black border-2 border-border relative overflow-hidden shadow-2xl">
+              <div className="absolute top-4 left-4 text-xs font-mono text-green-500/50 pointer-events-none">
+                LIVE GLOVE CURSOR
+              </div>
+              <canvas ref={canvasRef} width={800} height={500} className="w-full h-[500px]" />
+            </Card>
+            
+            <div className="grid grid-cols-2 gap-4">
+               <Card className="p-4 bg-muted/30">
+                 <div className="text-xs font-mono text-muted-foreground mb-1">Index Finger</div>
+                 <div className="font-mono text-sm">
+                   Z-Accel: {latestDataRef.current?.az1.toFixed(2) || "0.00"}
+                 </div>
+               </Card>
+               <Card className="p-4 bg-muted/30">
+                 <div className="text-xs font-mono text-muted-foreground mb-1">Palm Sensor</div>
+                 <div className="font-mono text-sm grid grid-cols-2">
+                   <div>X: {latestDataRef.current?.gz2.toFixed(2) || "0.00"}</div>
+                   <div>Y: {latestDataRef.current?.gy2.toFixed(2) || "0.00"}</div>
+                 </div>
+               </Card>
             </div>
           </div>
-        )}
+
+        </div>
       </main>
     </div>
   );
